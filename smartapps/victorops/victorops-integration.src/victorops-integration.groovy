@@ -29,9 +29,15 @@ definition(
 preferences {
 	section("Alert from temperature sensors:") {
     	input "temperatures", "capability.temperatureMeasurement", multiple: true, required: false
+        input "criticalHotTemperature", "number", title: "Critical Hot Temp", defaultValue: 90, range: "0..100"
+        input "warningHotTemperature", "number", title: "Warning Hot Temp", defaultValue: 80, range: "0..100"
+        input "warningColdTemperature", "number", title: "Warning Cold Temp", defaultValue: 60, range: "0..100"
+        input "criticalColdTemperature", "number", title: "Critical Cold Temp", defaultValue: 40, range: "0..100"
     }
     section("Alert from humidity sensors:") {
     	input "humidities", "capability.relativeHumidityMeasurement", multiple: true, required: false
+        input "criticalHumidity", "number", title: "Critical Humidity", defaultValue: 60, range: "0..100"
+        input "warningHumidity", "number", title: "Warning Humidity", defaultValue: 50, range: "0..100"
     }
     section("Alert from smoke detectors:") {
     	input "smokedetectors", "capability.smokeDetector", multiple: true, required: false
@@ -62,66 +68,116 @@ def updated() {
 
 def initialize() {
 	if (temperatures != null) {
-	    subscribe(temperatures,		"temperature",  			deviceHandler)
+	    subscribe(temperatures,		"temperature",  			temperatureDeviceHandler)
     }
 	if (motions != null) { 
-      subscribe(motions,			"motion",       			deviceHandler)
+      subscribe(motions,			"motion",       			motionDeviceHandler)
     }
 	if (smokedetectors != null) { 
-	  subscribe(smokedetectors,	"smokeDetector",			deviceHandler)
+	  subscribe(smokedetectors,	"smokeDetector",			smokeDeviceHandler)
     }
 	if (waterdetectors != null) { 
-	  subscribe(waterdetectors,	"water",					deviceHandler)
+	  subscribe(waterdetectors,	"water",					waterDeviceHandler)
     }
   	if (batteries != null) { 
-      subscribe(batteries,		"battery",                  deviceHandler)
+      subscribe(batteries,		"battery",                  batteryDeviceHandler)
     }
   	if (humidities != null) {
-     subscribe(humidities,		"humidity",                 deviceHandler)
+     subscribe(humidities,		"humidity",                 humidityDeviceHandler)
     }
 }
 
 def addField(fieldName, fieldValue, escapeQuote = false, comma = true) {
-  def base = ""
+  def rval = ""
+  
+  if (escapeQuote) { rval += '\\' }
+  rval = rval + '"' + fieldName 
+  if (escapeQuote) { rval += '\\' }
+  rval += '": '
 
-  if (escapeQuote) base += '\\'
-  base += '"' + fieldName 
-  if (escapeQuote) base += '\\'
-  base += '"'
-  if (comma) base += ','
-  return base
+  if (escapeQuote) { rval += '\\' }
+  rval = rval + '"' + fieldValue 
+  if (escapeQuote) { rval += '\\' }
+  rval += '"'
+
+  if (comma) { rval += ',' }
+//  log.debug "victorops adding field ${rval}"    
+  return rval
 }
 
-def deviceHandler(evt) {
+def batteryDeviceHandler(evt) {
+  sendAlert(evt, "critical", "battery")
+}
+
+def smokeDeviceHandler(evt) {
+  sendAlert(evt, "critical", "smoke detector")
+}
+
+def motionDeviceHandler(evt) {
+  sendAlert(evt, "info", "motionDetector")
+}
+
+def waterDeviceHandler(evt) {
+  if (evt.value == "wet") {
+	  sendAlert(evt, "critical", "waterSensor")
+  } else {
+  	  sendAlert(evt, "info", "waterSensor")
+  }
+}
+
+def humidityDeviceHandler(evt) {
+  if (evt.value.toInteger() > criticalHumidity) {
+	  sendAlert(evt, "critical", "humiditySensor")
+  } else if (evt.value.toInteger() > warningHumidity) {
+  	  sendAlert(evt, "warning", "humiditySensor")
+  } else {
+  	  sendAlert(evt, "info", "humiditySensor")
+  }
+}
+
+def temperatureDeviceHandler(evt) {
+  def curTemp = evt.value.toInteger()
+  if (curTemp > criticalHotTemperature || curTemp < criticalColdTemperature  ) {
+	  sendAlert(evt, "critical", "temperatureSensor")
+  } else if (curTemp > warningHotTemperature || curTemp < warningColdTemperature) {
+  	  sendAlert(evt, "warning", "temperatureSensor")
+  } else {
+  	  sendAlert(evt, "info", "temperatureSensor")
+  }
+}
+
+
+def sendAlert(evt, messageType, deviceType) {
    log.debug "victorops begin device handler"    
     try {
         def state = '{'       
-            state += addField("date", evt.date)
-            state += addField("name", evt.name)
-            state += addField("displayName", evt.displayName)
-            state += addField("device", evt.device)
-            state += addField("deviceId", evt.deviceId)
-            state += addField("value", evt.value)
-            state += addField("isStateChange", evt.isStateChange())
-            state += addField("id", evt.id)
-            state += addField("description", evt.description)
-            state += addField("descriptionText", evt.descriptionText)
-            state += addField("installedSmartAppId", evt.installedSmartAppId)
-            state += addField("isoDate", evt.isoDate)
-            state += addField("isDigital", evt.isDigital())
-            state += addField("isPhysical", evt.isPhysical())
-            state += addField("location", evt.location)
-            state += addField("locationId", evt.locationId)
-            state += addField("unit", evt.unit)
-            state += addField("source", evt.source, false, false)
+            state += addField("date", evt.date, true)
+            state += addField("name", evt.name, true)
+            state += addField("displayName", evt.displayName, true)
+            state += addField("device", evt.device, true)
+            state += addField("deviceId", evt.deviceId, true)
+            state += addField("value", evt.value, true)
+            state += addField("isStateChange", evt.isStateChange(), true)
+            state += addField("id", evt.id, true)
+            state += addField("description", evt.description, true)
+            state += addField("descriptionText", evt.descriptionText, true)
+            state += addField("installedSmartAppId", evt.installedSmartAppId, true)
+            state += addField("isoDate", evt.isoDate, true)
+            state += addField("isDigital", evt.isDigital(), true)
+            state += addField("isPhysical", evt.isPhysical(), true)
+            state += addField("location", evt.location, true)
+            state += addField("locationId", evt.locationId, true)
+            state += addField("unit", evt.unit, true)
+            state += addField("source", evt.source, true, false)
             state += '}'
     
         def json = '{'
-            json += addField("message_type", "critical", true)
-            json += addField("monitoring_tool","smartthings", true)
-            json += addField("entity_id", evt.device, true)
-            json += addField("state_message", state, true, false)
+            json += addField("message_type", messageType)
+            json += addField("monitoring_tool","smartthings")
+            json += addField("entity_id", deviceType + "." + evt.device)
+            json += addField("state_message", state, false, false)
             json += '}'
+            
         log.debug "victorops sending json msg ${json}"
 
         def params = [
