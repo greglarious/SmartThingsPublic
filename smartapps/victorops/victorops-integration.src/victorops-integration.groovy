@@ -25,6 +25,7 @@ definition(
     iconX2Url: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience@2x.png",
     iconX3Url: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience@2x.png")
     appSetting "restAPIKey"
+    appSetting "routingKey"
 
 preferences {
 	section("Alert from temperature sensors:") {
@@ -50,41 +51,55 @@ preferences {
     }
     section("Alert from batteries:") {
         input "batteries", "capability.battery", multiple: true, required: false
+        input "criticalBattery", "number", title: "Critical Battery", defaultValue: 30, range: "0..100"
+        input "warningBattery", "number", title: "Warning Battery", defaultValue: 40, range: "0..100"
     }
 }
 
 def installed() {
-	log.debug "Installed with settings: ${settings}"
-
+	log.debug("vops Installed with settings: ${settings}")
 	initialize()
 }
 
 def updated() {
-	log.debug "Updated with settings: ${settings}"
-
+	log.debug("vops Updated with settings: ${settings}")
 	unsubscribe()
 	initialize()
 }
 
 def initialize() {
-	if (temperatures != null) {
-	    subscribe(temperatures,		"temperature",  			temperatureDeviceHandler)
+  if (temperatures != null) {
+    log.debug "vops subscribing to temperatures"
+    for (t in temperatures) {
+      log.debug("vops subscribing to temp ${t}")
     }
-	if (motions != null) { 
-      subscribe(motions,			"motion",       			motionDeviceHandler)
-    }
-	if (smokedetectors != null) { 
-	  subscribe(smokedetectors,	"smokeDetector",			smokeDeviceHandler)
-    }
-	if (waterdetectors != null) { 
-	  subscribe(waterdetectors,	"water",					waterDeviceHandler)
-    }
-  	if (batteries != null) { 
-      subscribe(batteries,		"battery",                  batteryDeviceHandler)
-    }
-  	if (humidities != null) {
-     subscribe(humidities,		"humidity",                 humidityDeviceHandler)
-    }
+    subscribe(temperatures,		"temperature",  	temperatureDeviceHandler)
+  }
+  
+  if (motions != null) { 
+    log.debug("vops subscribing to motions")
+    subscribe(motions,			"motion",       	motionDeviceHandler)
+  }
+  
+  if (smokedetectors != null) { 
+    log.debug("vops subscribing to smoke detectors")
+    subscribe(smokedetectors,	"smokeDetector",	smokeDeviceHandler)
+  }
+  
+  if (waterdetectors != null) { 
+    log.debug("vops subscribing to water")
+    subscribe(waterdetectors,	"water",			waterDeviceHandler)
+  }
+  
+  if (batteries != null) { 
+    log.debug("vops subscribing to batteries")
+    subscribe(batteries,		"battery",          batteryDeviceHandler)
+  }
+
+  if (humidities != null) {
+    log.debug("vops subscribing to humidities")
+    subscribe(humidities,		"humidity",         humidityDeviceHandler)
+  }
 }
 
 def addField(fieldName, fieldValue, escapeQuote = false, comma = true) {
@@ -101,92 +116,106 @@ def addField(fieldName, fieldValue, escapeQuote = false, comma = true) {
   rval += '"'
 
   if (comma) { rval += ',' }
-//  log.debug "victorops adding field ${rval}"    
   return rval
 }
 
+def valueRangeDeviceHandler(evt, curValue, sensorType, tooLowCritical, tooLowWarning, tooHighWarning, tooHighCritical) {
+  log.debug("vops in ${sensorType} handler")
+  def alertState = "recovery"
+  if (curValue >= tooHighCritical || curValue <= tooLowCritical  ) {
+    alertState = "critical"
+  } else if (curValue >= tooHighWarning || curValue <= tooLowWarning) {
+  	alertState = "warning"
+  }
+
+  def stateKey = sensorType + "_" + evt.device
+  // always send critical and warning
+  if (alertState != "recovery") {
+    sendAlert(evt, alertState, sensorType)
+  } else {
+    // only send recovery if previously persisted state is something else
+    def savedState = state[stateKey]
+    if (savedState != null && savedState != "recovery") {
+      log.debug("vops previous state was[${savedState}]")
+ 	  sendAlert(evt, "recovery", sensorType)
+    }
+  }
+  state[stateKey] = alertState
+}
+
 def batteryDeviceHandler(evt) {
-  sendAlert(evt, "critical", "battery")
+  valueRangeDeviceHandler(evt, evt.value.toInteger(), "battery", criticalBattery, warningBattery, 110, 110)
 }
 
 def smokeDeviceHandler(evt) {
-  sendAlert(evt, "critical", "smoke detector")
+  log.debug("vops in smoke handler")
+  if (evt.value == "detected")	   sendAlert(evt, "critical", "smoke detector")
+  else if (evt.value == "tested")  sendAlert(evt, "warning", "smoke detector")
+  else if (evt.value == "clear")   ssendAlert(evt, "recovery", "smoke detector")
 }
 
 def motionDeviceHandler(evt) {
+  log.debug("vops in motion handler")
   sendAlert(evt, "info", "motionDetector")
 }
 
 def waterDeviceHandler(evt) {
+  log.debug("vops in water handler")
   if (evt.value == "wet") {
 	  sendAlert(evt, "critical", "waterSensor")
   } else {
-  	  sendAlert(evt, "info", "waterSensor")
+  	  sendAlert(evt, "recovery", "waterSensor")
   }
 }
 
 def humidityDeviceHandler(evt) {
-  if (evt.value.toInteger() > criticalHumidity) {
-	  sendAlert(evt, "critical", "humiditySensor")
-  } else if (evt.value.toInteger() > warningHumidity) {
-  	  sendAlert(evt, "warning", "humiditySensor")
-  } else {
-  	  sendAlert(evt, "info", "humiditySensor")
-  }
+  valueRangeDeviceHandler(evt, evt.value.toInteger(), "humiditySensor", 0, 0, warningHumidity, criticalHumidity)
 }
 
 def temperatureDeviceHandler(evt) {
-  def curTemp = evt.value.toInteger()
-  if (curTemp > criticalHotTemperature || curTemp < criticalColdTemperature  ) {
-	  sendAlert(evt, "critical", "temperatureSensor")
-  } else if (curTemp > warningHotTemperature || curTemp < warningColdTemperature) {
-  	  sendAlert(evt, "warning", "temperatureSensor")
-  } else {
-  	  sendAlert(evt, "info", "temperatureSensor")
-  }
+  valueRangeDeviceHandler(evt, evt.value.toInteger(), "temperatureSensor", criticalColdTemperature, warningColdTemperature, warningHotTemperature, criticalHotTemperature)
 }
 
-
 def sendAlert(evt, messageType, deviceType) {
-   log.debug "victorops begin device handler"    
-    try {
-        def state = '{'       
-            state += addField("date", evt.date, true)
-            state += addField("name", evt.name, true)
-            state += addField("displayName", evt.displayName, true)
-            state += addField("device", evt.device, true)
-            state += addField("deviceId", evt.deviceId, true)
-            state += addField("value", evt.value, true)
-            state += addField("isStateChange", evt.isStateChange(), true)
-            state += addField("id", evt.id, true)
-            state += addField("description", evt.description, true)
-            state += addField("descriptionText", evt.descriptionText, true)
-            state += addField("installedSmartAppId", evt.installedSmartAppId, true)
-            state += addField("isoDate", evt.isoDate, true)
-            state += addField("isDigital", evt.isDigital(), true)
-            state += addField("isPhysical", evt.isPhysical(), true)
-            state += addField("location", evt.location, true)
-            state += addField("locationId", evt.locationId, true)
-            state += addField("unit", evt.unit, true)
-            state += addField("source", evt.source, true, false)
-            state += '}'
+  log.debug("vops begin sendAlert")
+  try {
+      def state = '{'       
+      state += addField("date", evt.date, true)
+      state += addField("name", evt.name, true)
+      state += addField("displayName", evt.displayName, true)
+      state += addField("device", evt.device, true)
+      state += addField("deviceId", evt.deviceId, true)
+      state += addField("value", evt.value, true)
+      state += addField("isStateChange", evt.isStateChange(), true)
+      state += addField("id", evt.id, true)
+      state += addField("description", evt.description, true)
+      state += addField("descriptionText", evt.descriptionText, true)
+      state += addField("installedSmartAppId", evt.installedSmartAppId, true)
+      state += addField("isoDate", evt.isoDate, true)
+      state += addField("isDigital", evt.isDigital(), true)
+      state += addField("isPhysical", evt.isPhysical(), true)
+      state += addField("location", evt.location, true)
+      state += addField("locationId", evt.locationId, true)
+      state += addField("unit", evt.unit, true)
+      state += addField("source", evt.source, true, false)
+      state += '}'
     
-        def json = '{'
-            json += addField("message_type", messageType)
-            json += addField("monitoring_tool","smartthings")
-            json += addField("entity_id", deviceType + "." + evt.device)
-            json += addField("state_message", state, false, false)
-            json += '}'
+      def json = '{'
+      json += addField("message_type", messageType)
+      json += addField("monitoring_tool","smartthings")
+      json += addField("entity_id", deviceType + "." + evt.device)
+      json += addField("state_message", state, false, false)
+      json += '}'
             
-        log.debug "victorops sending json msg ${json}"
+      log.debug("vops sending json msg ${json}")
 
-        def params = [
-            uri: "https://alert.victorops.com/integrations/generic/20131114/alert/" + app.appSettings.restAPIKey + "/smartthings",
-            body: json
-        ]
+      def params = [
+          uri: "https://alert.victorops.com/integrations/generic/20131114/alert/" + app.appSettings.restAPIKey + "/" + app.appSettings.routingKey,
+          body: json
+      ]
         
-        httpPostJson(params)
-    } catch (Throwable e ) {
-       	log.debug "victorops error ${e}"
-    }
+      httpPostJson(params)
+  } catch (Throwable e ) {
+    log.debug("vops error ${e}")
+  }
 }
